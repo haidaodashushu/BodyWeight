@@ -10,7 +10,7 @@
 - 自动识别今天、昨天、前天、`2026年8月30日`、`8月30日` 等日期
 - 支持 kg / 公斤 / 千克 / 斤 / lb / 磅，并统一换算为 kg
 - Swift Charts 体重趋势曲线、近 7 天变化和历史记录
-- SwiftData 持久化，优先使用用户私有 CloudKit，失败时回落到本地数据库
+- SwiftData 本地持久化；付费开发者团队可按下方说明启用用户私有 CloudKit 同步
 
 ## 为什么采用 iCloud + 本地回落
 
@@ -26,11 +26,14 @@
 ## 运行
 
 1. 使用 Xcode 15 或更高版本打开 `BodyWeight.xcodeproj`。
-2. 在 Target → Signing & Capabilities 选择你的 Apple Developer Team。
-3. 确认 iCloud capability 中启用了 CloudKit，容器为 `iCloud.com.haidaodashushu.BodyWeight`。
-4. 选择 iOS 17+ 模拟器或真机运行。拍照和语音功能需要真机及对应系统权限。
+2. 在 Target → Signing & Capabilities 选择你的 Apple Developer Team，并启用自动签名。
+3. 选择 iOS 17+ 模拟器或真机运行。拍照和语音功能需要真机及对应系统权限。
 
-如暂时不使用 iCloud，可以在 `BodyWeightApp.swift` 中直接使用 `BodyWeightLocal` 配置，并从 Signing & Capabilities 移除 iCloud。
+默认配置兼容免费的 Personal Team，数据保存在设备本地。付费开发者团队如需启用 iCloud：
+
+1. 在 Signing & Capabilities 中添加 iCloud / CloudKit，并选择容器 `iCloud.com.haidaodashushu.BodyWeight`。
+2. 将 `BodyWeight/BodyWeight.entitlements` 配置为 Target 的 Code Signing Entitlements。
+3. 在 Swift Active Compilation Conditions 中添加 `ICLOUD_SYNC`。
 
 ## 测试
 

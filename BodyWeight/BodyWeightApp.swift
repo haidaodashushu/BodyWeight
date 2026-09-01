@@ -16,6 +16,8 @@ struct BodyWeightApp: App {
 private enum ModelContainerFactory {
     static func make() -> ModelContainer {
         let schema = Schema([WeightEntry.self])
+
+#if ICLOUD_SYNC
         let cloudConfiguration = ModelConfiguration(
             "BodyWeightCloud",
             schema: schema,
@@ -28,6 +30,7 @@ private enum ModelContainerFactory {
         ) {
             return cloudContainer
         }
+#endif
 
         let localConfiguration = ModelConfiguration(
             "BodyWeightLocal",
