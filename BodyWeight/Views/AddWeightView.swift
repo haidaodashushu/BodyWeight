@@ -11,12 +11,8 @@ struct AddWeightView: View {
     @State private var source: WeightEntry.Source = .manual
     @State private var weightText = ""
     @State private var selectedDate = Date()
-    @State private var selectedPhoto: PhotosPickerItem?
-    @State private var previewImage: UIImage?
     @State private var recognizedText = ""
     @State private var feedback = ""
-    @State private var isProcessingPhoto = false
-    @State private var showsCamera = false
     @State private var bodyPhotoPickerItem: PhotosPickerItem?
     @State private var bodyPhotoImage: UIImage?
     @State private var showsBodyCamera = false
@@ -28,7 +24,7 @@ struct AddWeightView: View {
             Form {
                 Section {
                     Picker("录入方式", selection: $source) {
-                        ForEach(WeightEntry.Source.allCases, id: \.self) { item in
+                        ForEach(WeightEntry.Source.availableInputCases, id: \.self) { item in
                             Label(item.title, systemImage: item.symbol).tag(item)
                         }
                     }
@@ -114,20 +110,9 @@ struct AddWeightView: View {
                 recognizedText = text
                 applyRecognizedText(text)
             }
-            .onChange(of: selectedPhoto) { _, item in
-                guard let item else { return }
-                Task { await loadPhoto(item) }
-            }
             .onChange(of: bodyPhotoPickerItem) { _, item in
                 guard let item else { return }
                 Task { await loadBodyPhoto(item) }
-            }
-            .sheet(isPresented: $showsCamera) {
-                CameraPicker { image in
-                    previewImage = image
-                    Task { await recognize(image) }
-                }
-                .ignoresSafeArea()
             }
             .sheet(isPresented: $showsBodyCamera) {
                 CameraPicker { image in
@@ -142,7 +127,7 @@ struct AddWeightView: View {
     @ViewBuilder
     private var inputSection: some View {
         switch source {
-        case .manual:
+        case .manual, .photo:
             Section("手动输入") {
                 Text("直接填写体重和日期；也可以输入“昨天 72.5kg”这样的句子。")
                     .font(.footnote)
@@ -150,35 +135,6 @@ struct AddWeightView: View {
                 TextField("体重或一句话", text: $recognizedText)
                     .onSubmit { applyRecognizedText(recognizedText) }
                 Button("识别这句话") { applyRecognizedText(recognizedText) }
-            }
-
-        case .photo:
-            Section("拍摄体重秤") {
-                if let previewImage {
-                    Image(uiImage: previewImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxHeight: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-
-                Button {
-                    showsCamera = true
-                } label: {
-                    Label("打开相机", systemImage: "camera.fill")
-                }
-                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Label("从照片中选择", systemImage: "photo.on.rectangle")
-                }
-
-                if isProcessingPhoto {
-                    HStack {
-                        ProgressView()
-                        Text("正在识别图片…")
-                    }
-                }
             }
 
         case .voice:
@@ -226,36 +182,11 @@ struct AddWeightView: View {
         }
     }
 
-    private func loadPhoto(_ item: PhotosPickerItem) async {
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else {
-                throw PhotoOCRService.OCRError.invalidImage
-            }
-            previewImage = image
-            await recognize(image)
-        } catch {
-            feedback = error.localizedDescription
-        }
-    }
-
-    private func recognize(_ image: UIImage) async {
-        isProcessingPhoto = true
-        defer { isProcessingPhoto = false }
-        do {
-            let text = try await PhotoOCRService.recognizeText(in: image)
-            recognizedText = text
-            applyRecognizedText(text)
-        } catch {
-            feedback = error.localizedDescription
-        }
-    }
-
     private func loadBodyPhoto(_ item: PhotosPickerItem) async {
         do {
             guard let data = try await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: data) else {
-                throw PhotoOCRService.OCRError.invalidImage
+                throw BodyPhotoStore.PhotoError.invalidImage
             }
             bodyPhotoImage = image
         } catch {

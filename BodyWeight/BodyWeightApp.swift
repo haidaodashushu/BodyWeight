@@ -185,8 +185,14 @@ enum BodyPhotoStore {
 
     enum PhotoError: LocalizedError {
         case encodingFailed
+        case invalidImage
 
-        var errorDescription: String? { "无法压缩这张照片，请换一张后重试。" }
+        var errorDescription: String? {
+            switch self {
+            case .encodingFailed: "无法压缩这张照片，请换一张后重试。"
+            case .invalidImage: "无法读取这张照片，请换一张后重试。"
+            }
+        }
     }
 }
 

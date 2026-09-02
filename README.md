@@ -6,7 +6,6 @@
 
 - 手动输入体重与日期
 - 中文语音录入，例如“今天的体重是 72.5 公斤”
-- 相机拍照或从相册选择，通过 Vision OCR 识别体重秤数字
 - 自动识别今天、昨天、前天、`2026年8月30日`、`8月30日` 等日期
 - 支持 kg / 公斤 / 千克 / 斤 / lb / 磅，并统一换算为 kg
 - Swift Charts 体重趋势曲线、近 7 天变化和历史记录
@@ -50,9 +49,8 @@ swift run ParserVerification
 
 - SwiftUI / SwiftData（iOS 17+）
 - Charts
-- Vision
 - Speech / AVFoundation
 
 ## 隐私
 
-OCR 和语音识别均调用 Apple 系统框架。体重数据和压缩后的全身照仅发送到配置的个人服务器，并通过 HTTPS 加密传输。
+语音识别调用 Apple 系统框架。体重数据和压缩后的全身照仅发送到配置的个人服务器，并通过 HTTPS 加密传输。

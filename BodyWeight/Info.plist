@@ -23,11 +23,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>用于拍摄体重秤识别数字，或为每日体重记录添加全身照。</string>
+	<string>用于为每日体重记录拍摄全身照。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>用于通过语音记录体重。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于选择体重秤照片，或为每日体重记录添加全身照。</string>
+	<string>用于从相册选择每日体重记录的全身照。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>用于识别“今天体重 72 公斤”等语音内容。</string>
 	<key>UIApplicationSceneManifest</key>

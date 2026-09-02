@@ -8,6 +8,8 @@ final class WeightEntry {
         case photo
         case voice
 
+        static let availableInputCases: [Source] = [.manual, .voice]
+
         var title: String {
             switch self {
             case .manual: "手动"
