@@ -9,7 +9,7 @@ struct DashboardView: View {
         filter: #Predicate<WeightEntry> { !$0.isDeleted },
         sort: \WeightEntry.recordedAt,
         order: .forward
-    ) private var entries: [WeightEntry]
+    ) private var storedEntries: [WeightEntry]
     @StateObject private var syncService = WeightSyncService.shared
     @State private var showsAddWeight = false
     @State private var showsSyncSettings = false
@@ -37,9 +37,9 @@ struct DashboardView: View {
                     Button {
                         showsSyncSettings = true
                     } label: {
-                        Image(systemName: syncService.isConfigured ? "cloud.fill" : "cloud")
+                        Image(systemName: "person.crop.circle.fill")
                     }
-                    .accessibilityLabel("服务器同步设置")
+                    .accessibilityLabel("账号与同步设置")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -65,6 +65,11 @@ struct DashboardView: View {
                 await syncService.synchronize(modelContext: modelContext)
             }
         }
+    }
+
+    private var entries: [WeightEntry] {
+        guard let ownerID = syncService.currentUser?.id else { return [] }
+        return storedEntries.filter { $0.ownerID == ownerID }
     }
 
     private var emptyState: some View {
@@ -392,7 +397,6 @@ private struct SyncSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @ObservedObject var syncService: WeightSyncService
-    @State private var token = ""
     @State private var localMessage = ""
 
     var body: some View {
@@ -408,24 +412,23 @@ private struct SyncSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("访问令牌") {
-                    SecureField(
-                        syncService.isConfigured ? "已保存；留空则保持不变" : "粘贴服务器令牌",
-                        text: $token
-                    )
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-
-                    Button("保存并立即同步") {
-                        Task { await saveAndSync() }
+                Section("账号") {
+                    LabeledContent("当前用户") {
+                        Text(syncService.currentUser?.username ?? "—")
                     }
-                    .disabled(token.isEmpty && !syncService.isConfigured)
 
-                    if syncService.isConfigured {
-                        Button("停止使用服务器", role: .destructive) {
-                            syncService.clearToken()
-                            token = ""
+                    Button("立即同步") {
+                        Task {
+                            await syncService.synchronize(modelContext: modelContext)
                             localMessage = syncService.statusMessage
+                        }
+                    }
+                    .disabled(syncService.isSyncing)
+
+                    Button("退出登录", role: .destructive) {
+                        Task {
+                            await syncService.signOut()
+                            dismiss()
                         }
                     }
                 }
@@ -441,12 +444,12 @@ private struct SyncSettingsView: View {
                 }
 
                 Section {
-                    Text("App 会保留本地副本。断网时可以继续记录，恢复网络后再次下拉即可同步。令牌仅保存在本机 Keychain。")
+                    Text("App 会按账号保留本地副本。断网时可以继续记录，恢复网络后再次下拉即可同步。登录令牌仅保存在本机 Keychain。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("服务器同步")
+            .navigationTitle("账号与同步")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -456,18 +459,6 @@ private struct SyncSettingsView: View {
         }
     }
 
-    private func saveAndSync() async {
-        do {
-            if !token.isEmpty {
-                try syncService.saveToken(token)
-                token = ""
-            }
-            await syncService.synchronize(modelContext: modelContext)
-            localMessage = syncService.statusMessage
-        } catch {
-            localMessage = error.localizedDescription
-        }
-    }
 }
 
 private extension View {

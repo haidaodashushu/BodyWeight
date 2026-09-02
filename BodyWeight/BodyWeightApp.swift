@@ -7,10 +7,17 @@ import UIKit
 @main
 struct BodyWeightApp: App {
     private let modelContainer = ModelContainerFactory.make()
+    @StateObject private var syncService = WeightSyncService.shared
 
     var body: some Scene {
         WindowGroup {
-            DashboardView()
+            Group {
+                if syncService.isAuthenticated {
+                    DashboardView()
+                } else {
+                    AuthenticationView(syncService: syncService)
+                }
+            }
         }
         .modelContainer(modelContainer)
     }
@@ -50,9 +57,45 @@ private enum ModelContainerFactory {
 
 private enum KeychainStore {
     private static let service = "com.haidaodashushu.BodyWeight.sync"
-    private static let account = "server-api-token"
+    private static let sessionTokenAccount = "session-token"
+    private static let currentUserAccount = "current-user"
+    private static let legacyTokenAccount = "server-api-token"
 
-    static func readToken() -> String? {
+    static func readSession() -> (token: String, user: AuthenticatedUser)? {
+        guard let token = read(account: sessionTokenAccount),
+              let userData = readData(account: currentUserAccount),
+              let user = try? JSONDecoder().decode(AuthenticatedUser.self, from: userData) else {
+            return nil
+        }
+        return (token, user)
+    }
+
+    static func saveSession(token: String, user: AuthenticatedUser) throws {
+        do {
+            try save(Data(token.utf8), account: sessionTokenAccount)
+            try save(try JSONEncoder().encode(user), account: currentUserAccount)
+            delete(account: legacyTokenAccount)
+        } catch {
+            clearSession()
+            throw error
+        }
+    }
+
+    static func clearSession() {
+        delete(account: sessionTokenAccount)
+        delete(account: currentUserAccount)
+    }
+
+    static func readLegacyToken() -> String? {
+        read(account: legacyTokenAccount)
+    }
+
+    private static func read(account: String) -> String? {
+        guard let data = readData(account: account) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func readData(account: String) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -61,12 +104,11 @@ private enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
     }
 
-    static func saveToken(_ token: String) throws {
+    private static func save(_ data: Data, account: String) throws {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -75,7 +117,7 @@ private enum KeychainStore {
         SecItemDelete(baseQuery as CFDictionary)
 
         var attributes = baseQuery
-        attributes[kSecValueData as String] = Data(token.utf8)
+        attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -83,7 +125,7 @@ private enum KeychainStore {
         }
     }
 
-    static func deleteToken() {
+    private static func delete(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -100,6 +142,28 @@ private struct SyncPayload: Codable {
 private struct SyncResponse: Codable {
     let entries: [RemoteWeightEntry]
     let serverTime: String
+}
+
+struct AuthenticatedUser: Codable, Equatable {
+    let id: String
+    let username: String
+}
+
+private struct AuthenticationRequest: Encodable {
+    let username: String
+    let password: String
+    let registrationCode: String?
+}
+
+private struct AuthenticationResponse: Decodable {
+    let token: String
+    let user: AuthenticatedUser
+    let claimedLegacyData: Bool
+}
+
+private struct APIErrorResponse: Decodable {
+    let error: String
+    let message: String?
 }
 
 private struct RemoteWeightEntry: Codable {
@@ -201,44 +265,145 @@ final class WeightSyncService: ObservableObject {
     static let shared = WeightSyncService()
     static let serverAddress = "https://8.138.40.226/body-weight-api"
 
-    @Published private(set) var isConfigured: Bool
+    @Published private(set) var currentUser: AuthenticatedUser?
     @Published private(set) var isSyncing = false
     @Published private(set) var lastSyncDate: Date?
-    @Published private(set) var statusMessage = "尚未配置服务器令牌"
+    @Published private(set) var statusMessage = "请登录后同步"
 
     private let endpoint = URL(string: serverAddress + "/v1/sync")!
     private let photoEndpoint = URL(string: serverAddress + "/v1/photos/")!
+    private let loginEndpoint = URL(string: serverAddress + "/v1/auth/login")!
+    private let registerEndpoint = URL(string: serverAddress + "/v1/auth/register")!
+    private let logoutEndpoint = URL(string: serverAddress + "/v1/auth/logout")!
+    private var sessionToken: String?
+
+    var isAuthenticated: Bool { currentUser != nil && sessionToken != nil }
+    var isConfigured: Bool { isAuthenticated }
+    var hasLegacyRegistrationCode: Bool { KeychainStore.readLegacyToken() != nil }
 
     private init() {
-        isConfigured = KeychainStore.readToken() != nil
-        if isConfigured { statusMessage = "等待同步" }
-    }
-
-    func saveToken(_ rawToken: String) throws {
-        let token = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard token.count >= 32 else {
-            throw SyncError.invalidTokenFormat
+        if let session = KeychainStore.readSession() {
+            sessionToken = session.token
+            currentUser = session.user
+            statusMessage = "等待同步"
         }
-        try KeychainStore.saveToken(token)
-        isConfigured = true
-        statusMessage = "令牌已保存"
     }
 
-    func clearToken() {
-        KeychainStore.deleteToken()
-        isConfigured = false
+    func register(
+        username: String,
+        password: String,
+        registrationCode: String,
+        modelContext: ModelContext
+    ) async throws {
+        let code = registrationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveCode = code.isEmpty ? KeychainStore.readLegacyToken() : code
+        guard let effectiveCode, !effectiveCode.isEmpty else {
+            throw SyncError.missingRegistrationCode
+        }
+        try await authenticate(
+            endpoint: registerEndpoint,
+            username: username,
+            password: password,
+            registrationCode: effectiveCode,
+            modelContext: modelContext
+        )
+    }
+
+    func login(username: String, password: String, modelContext: ModelContext) async throws {
+        try await authenticate(
+            endpoint: loginEndpoint,
+            username: username,
+            password: password,
+            registrationCode: nil,
+            modelContext: modelContext
+        )
+    }
+
+    func signOut() async {
+        if let sessionToken {
+            var request = URLRequest(url: logoutEndpoint)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 10
+            request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+            _ = try? await URLSession.shared.data(for: request)
+        }
+        clearSession(message: "已退出登录；本机缓存不会被删除")
+    }
+
+    func prepareLocalData(modelContext: ModelContext) throws {
+        guard let ownerID = currentUser?.id else { return }
+        let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>())
+        var changed = false
+        for entry in localEntries where entry.ownerID == nil {
+            entry.ownerID = ownerID
+            changed = true
+        }
+        if changed { try modelContext.save() }
+    }
+
+    private func authenticate(
+        endpoint: URL,
+        username rawUsername: String,
+        password: String,
+        registrationCode: String?,
+        modelContext: ModelContext
+    ) async throws {
+        let username = rawUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (3...32).contains(username.count),
+              username.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "_.-".contains($0)) }) else {
+            throw SyncError.invalidUsername
+        }
+        guard (8...128).contains(password.count) else { throw SyncError.invalidPassword }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(AuthenticationRequest(
+            username: username,
+            password: password,
+            registrationCode: registrationCode
+        ))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw SyncError.invalidResponse }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let serverError = try? JSONDecoder().decode(APIErrorResponse.self, from: data)
+            switch serverError?.error {
+            case "invalid_credentials": throw SyncError.invalidCredentials
+            case "username_taken": throw SyncError.usernameTaken
+            case "invalid_registration_code": throw SyncError.invalidRegistrationCode
+            default: throw SyncError.serverError(httpResponse.statusCode)
+            }
+        }
+        let authentication = try JSONDecoder().decode(AuthenticationResponse.self, from: data)
+        try KeychainStore.saveSession(token: authentication.token, user: authentication.user)
+        sessionToken = authentication.token
+        currentUser = authentication.user
+        statusMessage = authentication.claimedLegacyData ? "已接管原有服务器数据" : "登录成功"
+        try prepareLocalData(modelContext: modelContext)
+        await synchronize(modelContext: modelContext)
+    }
+
+    private func clearSession(message: String) {
+        KeychainStore.clearSession()
+        sessionToken = nil
+        currentUser = nil
         lastSyncDate = nil
-        statusMessage = "已停止云端同步，本地数据不会被删除"
+        statusMessage = message
     }
 
     func synchronize(modelContext: ModelContext) async {
-        guard !isSyncing, let token = KeychainStore.readToken() else { return }
+        guard !isSyncing,
+              let token = sessionToken,
+              let ownerID = currentUser?.id else { return }
         isSyncing = true
         statusMessage = "正在同步…"
         defer { isSyncing = false }
 
         do {
-            let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>())
+            try prepareLocalData(modelContext: modelContext)
+            let allLocalEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>())
+            let localEntries = allLocalEntries.filter { $0.ownerID == ownerID }
             let payload = SyncPayload(entries: localEntries.map(RemoteWeightEntry.init))
             var request = URLRequest(url: endpoint)
             request.httpMethod = "POST"
@@ -262,18 +427,32 @@ final class WeightSyncService: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let remote = try decoder.decode(SyncResponse.self, from: data)
-            try merge(remote.entries, into: modelContext)
-            try await synchronizePhotos(remote.entries, token: token, modelContext: modelContext)
+            try merge(remote.entries, ownerID: ownerID, into: modelContext)
+            try await synchronizePhotos(
+                remote.entries,
+                ownerID: ownerID,
+                token: token,
+                modelContext: modelContext
+            )
             try modelContext.save()
             lastSyncDate = Date()
             statusMessage = "体重和照片已与服务器同步"
         } catch {
+            if case SyncError.unauthorized = error {
+                clearSession(message: "登录已过期，请重新登录")
+            }
             statusMessage = error.localizedDescription
         }
     }
 
-    private func merge(_ remoteEntries: [RemoteWeightEntry], into modelContext: ModelContext) throws {
-        let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>())
+    private func merge(
+        _ remoteEntries: [RemoteWeightEntry],
+        ownerID: String,
+        into modelContext: ModelContext
+    ) throws {
+        let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>()).filter {
+            $0.ownerID == ownerID
+        }
         var localByID = Dictionary(uniqueKeysWithValues: localEntries.map { ($0.id, $0) })
 
         for remote in remoteEntries {
@@ -304,7 +483,8 @@ final class WeightSyncService: ObservableObject {
                     source: source,
                     originalText: remote.originalText,
                     createdAt: remote.createdAt,
-                    updatedAt: remote.updatedAt
+                    updatedAt: remote.updatedAt,
+                    ownerID: ownerID
                 ))
             }
         }
@@ -312,10 +492,13 @@ final class WeightSyncService: ObservableObject {
 
     private func synchronizePhotos(
         _ remoteEntries: [RemoteWeightEntry],
+        ownerID: String,
         token: String,
         modelContext: ModelContext
     ) async throws {
-        let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>())
+        let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>()).filter {
+            $0.ownerID == ownerID
+        }
         let localByID = Dictionary(uniqueKeysWithValues: localEntries.map { ($0.id, $0) })
 
         for remote in remoteEntries where !remote.isDeleted {
@@ -381,18 +564,164 @@ final class WeightSyncService: ObservableObject {
     }
 
     enum SyncError: LocalizedError {
-        case invalidTokenFormat
+        case invalidUsername
+        case invalidPassword
+        case missingRegistrationCode
+        case invalidRegistrationCode
+        case usernameTaken
+        case invalidCredentials
         case invalidResponse
         case unauthorized
         case serverError(Int)
 
         var errorDescription: String? {
             switch self {
-            case .invalidTokenFormat: "令牌格式不正确，请完整粘贴服务器令牌。"
+            case .invalidUsername: "用户名需为 3–32 位，只能包含英文、数字、点、下划线或短横线。"
+            case .invalidPassword: "密码长度需为 8–128 位。"
+            case .missingRegistrationCode: "请输入服务器注册码；升级用户也可以使用原访问令牌。"
+            case .invalidRegistrationCode: "服务器注册码不正确。"
+            case .usernameTaken: "这个用户名已经被注册。"
+            case .invalidCredentials: "用户名或密码错误。"
             case .invalidResponse: "服务器返回了无法识别的响应。"
-            case .unauthorized: "服务器拒绝了令牌，请重新粘贴。"
+            case .unauthorized: "登录已过期，请重新登录。"
             case .serverError(let status): "服务器同步失败（HTTP \(status)）。"
             }
         }
+    }
+}
+
+private struct AuthenticationView: View {
+    @Environment(\.modelContext) private var modelContext
+    @ObservedObject var syncService: WeightSyncService
+
+    @State private var mode: Mode = .login
+    @State private var username = ""
+    @State private var password = ""
+    @State private var passwordConfirmation = ""
+    @State private var registrationCode = ""
+    @State private var message = ""
+    @State private var isSubmitting = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(spacing: 12) {
+                        Image(systemName: "scalemass.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.blue.gradient)
+                        Text("体重趋势")
+                            .font(.title.bold())
+                        Text("登录后，你的体重和全身照只会同步到自己的账号。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                }
+
+                Section {
+                    Picker("账号操作", selection: $mode) {
+                        ForEach(Mode.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section(mode == .login ? "登录" : "注册") {
+                    TextField("用户名", text: $username)
+                        .textContentType(.username)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("密码（至少 8 位）", text: $password)
+                        .textContentType(mode == .login ? .password : .newPassword)
+
+                    if mode == .register {
+                        SecureField("再次输入密码", text: $passwordConfirmation)
+                            .textContentType(.newPassword)
+                        SecureField(
+                            syncService.hasLegacyRegistrationCode
+                                ? "注册码（已保存原令牌，可留空）"
+                                : "服务器注册码",
+                            text: $registrationCode
+                        )
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    }
+
+                    Button {
+                        Task { await submit() }
+                    } label: {
+                        if isSubmitting {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text(mode.actionTitle)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .disabled(isSubmitting || username.isEmpty || password.isEmpty)
+                }
+
+                if !message.isEmpty {
+                    Section("提示") {
+                        Text(message)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Section {
+                    Label("账号密码通过 HTTPS 加密传输；密码不会明文保存在服务器。", systemImage: "lock.shield")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("账号")
+            .onChange(of: mode) { _, _ in
+                message = ""
+                password = ""
+                passwordConfirmation = ""
+            }
+        }
+    }
+
+    private func submit() async {
+        message = ""
+        if mode == .register, password != passwordConfirmation {
+            message = "两次输入的密码不一致。"
+            return
+        }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        do {
+            switch mode {
+            case .login:
+                try await syncService.login(
+                    username: username,
+                    password: password,
+                    modelContext: modelContext
+                )
+            case .register:
+                try await syncService.register(
+                    username: username,
+                    password: password,
+                    registrationCode: registrationCode,
+                    modelContext: modelContext
+                )
+            }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private enum Mode: String, CaseIterable, Identifiable {
+        case login
+        case register
+
+        var id: String { rawValue }
+        var title: String { self == .login ? "登录" : "注册" }
+        var actionTitle: String { self == .login ? "登录" : "创建账号" }
     }
 }

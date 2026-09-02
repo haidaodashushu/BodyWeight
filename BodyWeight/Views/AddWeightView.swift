@@ -206,7 +206,8 @@ struct AddWeightView: View {
             weightKG: weight,
             recordedAt: selectedDate,
             source: source,
-            originalText: recognizedText
+            originalText: recognizedText,
+            ownerID: WeightSyncService.shared.currentUser?.id
         )
         do {
             if let bodyPhotoImage {

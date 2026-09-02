@@ -36,15 +36,17 @@ for expired_backup in backups[retention_count:]:
 
 photo_backup_directory = backup_directory / "photos"
 photo_backup_directory.mkdir(parents=True, exist_ok=True)
-source_names: set[str] = set()
+source_relative_paths: set[Path] = set()
 if photo_directory.exists():
-    for source_photo in photo_directory.glob("*.jpg"):
-        source_names.add(source_photo.name)
-        destination_photo = photo_backup_directory / source_photo.name
+    for source_photo in photo_directory.rglob("*.jpg"):
+        relative_path = source_photo.relative_to(photo_directory)
+        source_relative_paths.add(relative_path)
+        destination_photo = photo_backup_directory / relative_path
+        destination_photo.parent.mkdir(parents=True, exist_ok=True)
         if not destination_photo.exists() or source_photo.stat().st_mtime_ns > destination_photo.stat().st_mtime_ns:
             shutil.copy2(source_photo, destination_photo)
-for stale_photo in photo_backup_directory.glob("*.jpg"):
-    if stale_photo.name not in source_names:
+for stale_photo in photo_backup_directory.rglob("*.jpg"):
+    if stale_photo.relative_to(photo_backup_directory) not in source_relative_paths:
         stale_photo.unlink()
 
 print(destination_path)
