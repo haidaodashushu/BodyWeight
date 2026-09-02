@@ -140,10 +140,14 @@ struct DashboardView: View {
                 .foregroundStyle(.blue)
             }
             .chartYScale(domain: chartDomain)
+            .chartXScale(range: .plotDimension(startPadding: 30, endPadding: 30))
             .chartXAxis {
                 AxisMarks(values: chartXAxisDates) { _ in
                     AxisGridLine().foregroundStyle(.clear)
-                    AxisValueLabel(format: .dateTime.month().day())
+                    AxisValueLabel(
+                        format: .dateTime.month().day(),
+                        collisionResolution: .disabled
+                    )
                 }
             }
             .chartYAxis {
