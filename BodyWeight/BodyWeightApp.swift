@@ -2,6 +2,7 @@ import Foundation
 import Security
 import SwiftData
 import SwiftUI
+import UIKit
 
 @main
 struct BodyWeightApp: App {
@@ -110,6 +111,7 @@ private struct RemoteWeightEntry: Codable {
     let source: String
     let originalText: String
     let isDeleted: Bool
+    let photoUpdatedAt: Date?
 
     init(_ entry: WeightEntry) {
         id = entry.id
@@ -120,6 +122,71 @@ private struct RemoteWeightEntry: Codable {
         source = entry.sourceRawValue
         originalText = entry.originalText
         isDeleted = entry.isDeleted
+        photoUpdatedAt = entry.photoUpdatedAt
+    }
+}
+
+enum BodyPhotoStore {
+    private static let directoryName = "body-weight-photos"
+
+    static func save(_ image: UIImage, for entryID: UUID) throws -> String {
+        guard let data = resizedJPEGData(from: image) else {
+            throw PhotoError.encodingFailed
+        }
+        return try saveJPEGData(data, for: entryID)
+    }
+
+    static func saveJPEGData(_ data: Data, for entryID: UUID) throws -> String {
+        let filename = entryID.uuidString.lowercased() + ".jpg"
+        try data.write(to: try fileURL(filename: filename), options: .atomic)
+        return filename
+    }
+
+    static func data(filename: String?) -> Data? {
+        guard let filename,
+              let url = try? fileURL(filename: filename) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    static func image(filename: String?) -> UIImage? {
+        guard let data = data(filename: filename) else { return nil }
+        return UIImage(data: data)
+    }
+
+    static func delete(filename: String?) {
+        guard let filename,
+              let url = try? fileURL(filename: filename) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private static func fileURL(filename: String) throws -> URL {
+        let applicationSupport = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let directory = applicationSupport.appendingPathComponent(directoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(filename, isDirectory: false)
+    }
+
+    private static func resizedJPEGData(from image: UIImage) -> Data? {
+        let maximumDimension: CGFloat = 1_800
+        let currentMaximum = max(image.size.width, image.size.height)
+        let scale = currentMaximum > maximumDimension ? maximumDimension / currentMaximum : 1
+        let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        return resized.jpegData(compressionQuality: 0.82)
+    }
+
+    enum PhotoError: LocalizedError {
+        case encodingFailed
+
+        var errorDescription: String? { "无法压缩这张照片，请换一张后重试。" }
     }
 }
 
@@ -134,6 +201,7 @@ final class WeightSyncService: ObservableObject {
     @Published private(set) var statusMessage = "尚未配置服务器令牌"
 
     private let endpoint = URL(string: serverAddress + "/v1/sync")!
+    private let photoEndpoint = URL(string: serverAddress + "/v1/photos/")!
 
     private init() {
         isConfigured = KeychainStore.readToken() != nil
@@ -189,9 +257,10 @@ final class WeightSyncService: ObservableObject {
             decoder.dateDecodingStrategy = .iso8601
             let remote = try decoder.decode(SyncResponse.self, from: data)
             try merge(remote.entries, into: modelContext)
+            try await synchronizePhotos(remote.entries, token: token, modelContext: modelContext)
             try modelContext.save()
             lastSyncDate = Date()
-            statusMessage = "已与服务器同步"
+            statusMessage = "体重和照片已与服务器同步"
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -205,6 +274,7 @@ final class WeightSyncService: ObservableObject {
             if remote.isDeleted {
                 if let local = localByID.removeValue(forKey: remote.id),
                    remote.updatedAt >= local.updatedAt {
+                    BodyPhotoStore.delete(filename: local.photoLocalFilename)
                     modelContext.delete(local)
                 }
                 continue
@@ -231,6 +301,76 @@ final class WeightSyncService: ObservableObject {
                     updatedAt: remote.updatedAt
                 ))
             }
+        }
+    }
+
+    private func synchronizePhotos(
+        _ remoteEntries: [RemoteWeightEntry],
+        token: String,
+        modelContext: ModelContext
+    ) async throws {
+        let localEntries = try modelContext.fetch(FetchDescriptor<WeightEntry>())
+        let localByID = Dictionary(uniqueKeysWithValues: localEntries.map { ($0.id, $0) })
+
+        for remote in remoteEntries where !remote.isDeleted {
+            guard let local = localByID[remote.id] else { continue }
+            let localData = BodyPhotoStore.data(filename: local.photoLocalFilename)
+
+            if let localData, let localUpdatedAt = local.photoUpdatedAt,
+               remote.photoUpdatedAt == nil || localUpdatedAt > remote.photoUpdatedAt! {
+                let uploadUpdatedAt = Date(
+                    timeIntervalSince1970: floor(localUpdatedAt.timeIntervalSince1970)
+                )
+                try await uploadPhoto(
+                    localData,
+                    entryID: local.id,
+                    updatedAt: uploadUpdatedAt,
+                    token: token
+                )
+                local.photoUpdatedAt = uploadUpdatedAt
+            } else if let remoteUpdatedAt = remote.photoUpdatedAt,
+                      localData == nil || local.photoUpdatedAt == nil || remoteUpdatedAt > local.photoUpdatedAt! {
+                let data = try await downloadPhoto(entryID: local.id, token: token)
+                local.photoLocalFilename = try BodyPhotoStore.saveJPEGData(data, for: local.id)
+                local.photoUpdatedAt = remoteUpdatedAt
+            }
+        }
+    }
+
+    private func uploadPhoto(
+        _ data: Data,
+        entryID: UUID,
+        updatedAt: Date,
+        token: String
+    ) async throws {
+        var request = URLRequest(url: photoEndpoint.appendingPathComponent(entryID.uuidString.lowercased()))
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 60
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(ISO8601DateFormatter().string(from: updatedAt), forHTTPHeaderField: "X-Photo-Updated-At")
+        request.httpBody = data
+        let (_, response) = try await URLSession.shared.data(for: request)
+        try validate(response)
+    }
+
+    private func downloadPhoto(entryID: UUID, token: String) async throws -> Data {
+        var request = URLRequest(url: photoEndpoint.appendingPathComponent(entryID.uuidString.lowercased()))
+        request.timeoutInterval = 60
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response)
+        guard data.starts(with: [0xFF, 0xD8]) else { throw SyncError.invalidResponse }
+        return data
+    }
+
+    private func validate(_ response: URLResponse) throws {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SyncError.invalidResponse
+        }
+        guard httpResponse.statusCode != 401 else { throw SyncError.unauthorized }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw SyncError.serverError(httpResponse.statusCode)
         }
     }
 

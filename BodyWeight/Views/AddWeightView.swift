@@ -17,6 +17,9 @@ struct AddWeightView: View {
     @State private var feedback = ""
     @State private var isProcessingPhoto = false
     @State private var showsCamera = false
+    @State private var bodyPhotoPickerItem: PhotosPickerItem?
+    @State private var bodyPhotoImage: UIImage?
+    @State private var showsBodyCamera = false
 
     private let parser = WeightTextParser()
 
@@ -42,6 +45,39 @@ struct AddWeightView: View {
                             .foregroundStyle(.secondary)
                     }
                     DatePicker("日期", selection: $selectedDate, displayedComponents: .date)
+                }
+
+                Section("当日全身照（可选）") {
+                    Text("这张照片会与本条体重记录绑定，并同步到你的私人服务器。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    if let bodyPhotoImage {
+                        Image(uiImage: bodyPhotoImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 320)
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    Button {
+                        showsBodyCamera = true
+                    } label: {
+                        Label("拍摄全身照", systemImage: "figure.stand")
+                    }
+                    .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+
+                    PhotosPicker(selection: $bodyPhotoPickerItem, matching: .images) {
+                        Label("从相册选择全身照", systemImage: "photo.on.rectangle")
+                    }
+
+                    if bodyPhotoImage != nil {
+                        Button("移除这张照片", role: .destructive) {
+                            bodyPhotoImage = nil
+                            bodyPhotoPickerItem = nil
+                        }
+                    }
                 }
 
                 if !recognizedText.isEmpty || !feedback.isEmpty {
@@ -82,10 +118,20 @@ struct AddWeightView: View {
                 guard let item else { return }
                 Task { await loadPhoto(item) }
             }
+            .onChange(of: bodyPhotoPickerItem) { _, item in
+                guard let item else { return }
+                Task { await loadBodyPhoto(item) }
+            }
             .sheet(isPresented: $showsCamera) {
                 CameraPicker { image in
                     previewImage = image
                     Task { await recognize(image) }
+                }
+                .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showsBodyCamera) {
+                CameraPicker { image in
+                    bodyPhotoImage = image
                 }
                 .ignoresSafeArea()
             }
@@ -205,6 +251,18 @@ struct AddWeightView: View {
         }
     }
 
+    private func loadBodyPhoto(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else {
+                throw PhotoOCRService.OCRError.invalidImage
+            }
+            bodyPhotoImage = image
+        } catch {
+            feedback = "全身照读取失败：\(error.localizedDescription)"
+        }
+    }
+
     private func save() {
         let normalized = weightText.replacingOccurrences(of: ",", with: ".")
         guard let weight = Double(normalized), (20...500).contains(weight) else {
@@ -218,6 +276,15 @@ struct AddWeightView: View {
             source: source,
             originalText: recognizedText
         )
+        do {
+            if let bodyPhotoImage {
+                entry.photoLocalFilename = try BodyPhotoStore.save(bodyPhotoImage, for: entry.id)
+                entry.photoUpdatedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+            }
+        } catch {
+            feedback = "全身照保存失败：\(error.localizedDescription)"
+            return
+        }
         modelContext.insert(entry)
         do {
             try modelContext.save()

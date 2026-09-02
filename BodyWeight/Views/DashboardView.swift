@@ -1,6 +1,7 @@
 import Charts
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct DashboardView: View {
     @Environment(\.modelContext) private var modelContext
@@ -12,6 +13,7 @@ struct DashboardView: View {
     @StateObject private var syncService = WeightSyncService.shared
     @State private var showsAddWeight = false
     @State private var showsSyncSettings = false
+    @State private var selectedPhotoEntry: WeightEntry?
 
     var body: some View {
         NavigationStack {
@@ -22,6 +24,7 @@ struct DashboardView: View {
                     } else {
                         summaryCard
                         chartCard
+                        if !photoEntries.isEmpty { photoTimelineCard }
                         historyCard
                     }
                 }
@@ -51,6 +54,9 @@ struct DashboardView: View {
             }
             .sheet(isPresented: $showsSyncSettings) {
                 SyncSettingsView(syncService: syncService)
+            }
+            .sheet(item: $selectedPhotoEntry) { entry in
+                BodyPhotoDetailView(entry: entry)
             }
             .task {
                 await syncService.synchronize(modelContext: modelContext)
@@ -162,9 +168,14 @@ struct DashboardView: View {
                         .foregroundStyle(.blue)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entry.recordedAt.formatted(date: .abbreviated, time: .omitted))
-                        Text(entry.source.title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 5) {
+                            Text(entry.source.title)
+                            if BodyPhotoStore.image(filename: entry.photoLocalFilename) != nil {
+                                Label("全身照", systemImage: "photo.fill")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                     Spacer()
                     Text(entry.weightKG.formatted(.number.precision(.fractionLength(1))) + " kg")
@@ -186,6 +197,53 @@ struct DashboardView: View {
     }
 
     private var latestEntry: WeightEntry? { entries.last }
+
+    private var photoEntries: [WeightEntry] {
+        entries.filter { BodyPhotoStore.image(filename: $0.photoLocalFilename) != nil }
+    }
+
+    private var photoTimelineCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("身材变化")
+                .font(.headline)
+            Text("点开照片，对照当天体重查看变化。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 12) {
+                    ForEach(photoEntries.reversed()) { entry in
+                        Button {
+                            selectedPhotoEntry = entry
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if let image = BodyPhotoStore.image(filename: entry.photoLocalFilename) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 132, height: 190)
+                                        .clipped()
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
+                                Text(entry.recordedAt.formatted(.dateTime.month().day()))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(entry.weightKG.formatted(.number.precision(.fractionLength(1))) + " kg")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(
+                            entry.recordedAt.formatted(date: .abbreviated, time: .omitted)
+                            + "，" + entry.weightKG.formatted() + "公斤，全身照"
+                        )
+                    }
+                }
+            }
+        }
+        .cardStyle()
+    }
 
     private var recentChange: Double? {
         guard let latest = entries.last else { return nil }
@@ -220,10 +278,54 @@ struct DashboardView: View {
     }
 
     private func delete(_ entry: WeightEntry) {
+        BodyPhotoStore.delete(filename: entry.photoLocalFilename)
+        entry.photoLocalFilename = nil
+        entry.photoUpdatedAt = nil
         entry.isDeleted = true
         entry.updatedAt = Date()
         try? modelContext.save()
         Task { await syncService.synchronize(modelContext: modelContext) }
+    }
+}
+
+private struct BodyPhotoDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    let entry: WeightEntry
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    if let image = BodyPhotoStore.image(filename: entry.photoLocalFilename) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                    } else {
+                        ContentUnavailableView("照片暂不可用", systemImage: "photo.badge.exclamationmark")
+                    }
+
+                    HStack {
+                        Label(
+                            entry.recordedAt.formatted(date: .complete, time: .omitted),
+                            systemImage: "calendar"
+                        )
+                        Spacer()
+                        Text(entry.weightKG.formatted(.number.precision(.fractionLength(1))) + " kg")
+                            .font(.title3.weight(.bold))
+                    }
+                }
+                .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("当日记录")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
     }
 }
 

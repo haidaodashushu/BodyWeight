@@ -33,6 +33,8 @@ final class WeightEntry {
     var sourceRawValue: String = Source.manual.rawValue
     var originalText: String = ""
     var isDeleted: Bool = false
+    var photoLocalFilename: String?
+    var photoUpdatedAt: Date?
 
     var source: Source {
         get { Source(rawValue: sourceRawValue) ?? .manual }
@@ -47,7 +49,9 @@ final class WeightEntry {
         originalText: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        isDeleted: Bool = false
+        isDeleted: Bool = false,
+        photoLocalFilename: String? = nil,
+        photoUpdatedAt: Date? = nil
     ) {
         self.id = id
         self.weightKG = weightKG
@@ -57,5 +61,7 @@ final class WeightEntry {
         self.sourceRawValue = source.rawValue
         self.originalText = originalText
         self.isDeleted = isDeleted
+        self.photoLocalFilename = photoLocalFilename
+        self.photoUpdatedAt = photoUpdatedAt
     }
 }

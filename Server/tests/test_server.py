@@ -47,6 +47,32 @@ class WeightRepositoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 20 and 500"):
             self.repository.synchronize([self.entry(weight=5)])
 
+    def test_photo_is_bound_to_entry_and_removed_with_tombstone(self) -> None:
+        self.repository.synchronize([self.entry(weight=80)])
+        jpeg = b"\xff\xd8daily-photo\xff\xd9"
+        photo_time = (self.now + timedelta(seconds=1)).isoformat()
+
+        saved_time = self.repository.save_photo(self.entry_id, jpeg, photo_time)
+        photo = self.repository.get_photo(self.entry_id)
+
+        self.assertEqual(saved_time, photo_time.replace("+00:00", "Z"))
+        self.assertIsNotNone(photo)
+        self.assertEqual(photo[0].read_bytes(), jpeg)
+        synced = self.repository.synchronize([])
+        self.assertEqual(synced[0]["photoUpdatedAt"], saved_time)
+
+        self.repository.synchronize([self.entry(weight=80, updated_offset=2, deleted=True)])
+        self.assertIsNone(self.repository.get_photo(self.entry_id))
+        self.assertFalse(self.repository.photo_path(self.entry_id).exists())
+
+    def test_photo_requires_an_existing_entry(self) -> None:
+        with self.assertRaises(LookupError):
+            self.repository.save_photo(
+                self.entry_id,
+                b"\xff\xd8daily-photo\xff\xd9",
+                self.now.isoformat(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

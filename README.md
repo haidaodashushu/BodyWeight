@@ -1,6 +1,6 @@
 # BodyWeight（体重趋势）
 
-一款本地优先、可通过 iCloud 同步的 iOS 体重记录 App。
+一款本地优先、可与私人服务器同步的 iOS 体重记录 App。
 
 ## 已实现
 
@@ -10,6 +10,7 @@
 - 自动识别今天、昨天、前天、`2026年8月30日`、`8月30日` 等日期
 - 支持 kg / 公斤 / 千克 / 斤 / lb / 磅，并统一换算为 kg
 - Swift Charts 体重趋势曲线、近 7 天变化和历史记录
+- 每条体重记录可绑定一张全身照，并按日期浏览身材变化
 - SwiftData 本地缓存 + 私有服务器双向同步，离线仍可记录
 - Bearer Token 存入 iOS Keychain，不写入代码或公开仓库
 
@@ -19,7 +20,9 @@ App 始终在设备上保留 SwiftData 本地副本，并可与个人服务器�
 
 - API 地址：`https://8.138.40.226/body-weight-api/`
 - 服务端数据库：`/var/lib/body-weight-api/body-weight.sqlite3`
+- 服务端照片：`/var/lib/body-weight-api/photos/<记录 UUID>.jpg`
 - 每日备份：`/var/backups/body-weight-api`，保留 30 份
+- 照片按变化增量上传和下载，不会在每次同步时重复传全部图片
 - 保存、删除、启动 App 时自动同步，也可以在主页下拉刷新
 - 删除使用同步 tombstone，避免其他设备恢复已删除记录
 
@@ -41,7 +44,7 @@ App 始终在设备上保留 SwiftData 本地副本，并可与个人服务器�
 swift run ParserVerification
 ```
 
-相机、语音、CloudKit 和完整 UI 仍需用 Xcode/真机验证。
+相机、语音和完整 UI 仍需用 Xcode/真机验证。
 
 ## 技术栈
 
@@ -49,8 +52,7 @@ swift run ParserVerification
 - Charts
 - Vision
 - Speech / AVFoundation
-- CloudKit
 
 ## 隐私
 
-OCR 和语音识别均调用 Apple 系统框架。体重数据仅发送到配置的个人服务器，并通过 HTTPS 加密传输。
+OCR 和语音识别均调用 Apple 系统框架。体重数据和压缩后的全身照仅发送到配置的个人服务器，并通过 HTTPS 加密传输。
