@@ -111,8 +111,16 @@ struct DashboardView: View {
 
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("趋势")
-                .font(.headline)
+            HStack {
+                Text("趋势")
+                    .font(.headline)
+                Spacer()
+                if chartCanScroll {
+                    Label("左右滑动", systemImage: "arrow.left.and.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             Chart(entries) { entry in
                 LineMark(
                     x: .value("日期", chartDate(for: entry)),
@@ -140,14 +148,32 @@ struct DashboardView: View {
                 .foregroundStyle(.blue)
             }
             .chartYScale(domain: chartDomain)
-            .chartXScale(range: .plotDimension(startPadding: 30, endPadding: 30))
+            .chartXScale(
+                domain: chartXDomain,
+                range: .plotDimension(startPadding: 30, endPadding: 30)
+            )
+            .chartScrollableAxes(.horizontal)
+            .chartXVisibleDomain(length: chartVisibleDomainLength)
+            .chartScrollPosition(initialX: chartInitialScrollDate)
+            .chartScrollTargetBehavior(
+                .valueAligned(
+                    matching: DateComponents(hour: 0),
+                    majorAlignment: .matching(DateComponents(day: 1))
+                )
+            )
             .chartXAxis {
-                AxisMarks(values: chartXAxisDates) { _ in
+                AxisMarks(values: chartXAxisDates) { value in
                     AxisGridLine().foregroundStyle(.clear)
                     AxisValueLabel(
-                        format: .dateTime.month().day(),
-                        collisionResolution: .disabled
-                    )
+                        collisionResolution: .greedy(
+                            priority: value.index == value.count - 1 ? 1 : 0,
+                            minimumSpacing: 8
+                        )
+                    ) {
+                        if let date = value.as(Date.self) {
+                            Text(date.formatted(.dateTime.month().day()))
+                        }
+                    }
                 }
             }
             .chartYAxis {
@@ -265,21 +291,50 @@ struct DashboardView: View {
     }
 
     private var chartXAxisDates: [Date] {
-        let uniqueDates = Set(entries.map { chartDate(for: $0) }).sorted()
-        let maximumLabelCount = 5
-        guard uniqueDates.count > maximumLabelCount else { return uniqueDates }
-
-        let lastIndex = uniqueDates.count - 1
-        return (0..<maximumLabelCount).map { position in
-            let progress = Double(position) / Double(maximumLabelCount - 1)
-            let index = Int((progress * Double(lastIndex)).rounded())
-            return uniqueDates[index]
+        guard chartDates.count > Self.visibleChartDateCount else { return chartDates }
+        var sampledDates = Array(chartDates.reversed().enumerated().compactMap { offset, date in
+            offset.isMultiple(of: 2) ? date : nil
+        }.reversed())
+        if let earliestDate = chartDates.first, sampledDates.first != earliestDate {
+            sampledDates.insert(earliestDate, at: 0)
         }
+        return sampledDates
+    }
+
+    private var chartCanScroll: Bool {
+        chartXDomain.upperBound.timeIntervalSince(chartXDomain.lowerBound) > Self.visibleChartDaySpan
+    }
+
+    private var chartVisibleDomainLength: TimeInterval {
+        let fullDomainLength = chartXDomain.upperBound.timeIntervalSince(chartXDomain.lowerBound)
+        return min(fullDomainLength, Self.visibleChartDaySpan)
+    }
+
+    private var chartInitialScrollDate: Date {
+        chartXDomain.upperBound.addingTimeInterval(-chartVisibleDomainLength)
     }
 
     private func chartDate(for entry: WeightEntry) -> Date {
         Calendar.current.startOfDay(for: entry.recordedAt)
     }
+
+    private var chartXDomain: ClosedRange<Date> {
+        guard let first = chartDates.first,
+              let last = chartDates.last else {
+            let now = Calendar.current.startOfDay(for: Date())
+            return now.addingTimeInterval(-Self.halfDay)...now.addingTimeInterval(Self.halfDay)
+        }
+        return first.addingTimeInterval(-Self.halfDay)...last.addingTimeInterval(Self.halfDay)
+    }
+
+    private var chartDates: [Date] {
+        Set(entries.map { chartDate(for: $0) }).sorted()
+    }
+
+    private static let secondsPerDay: TimeInterval = 24 * 60 * 60
+    private static let halfDay = secondsPerDay / 2
+    private static let visibleChartDateCount = 5
+    private static let visibleChartDaySpan = secondsPerDay * 5
 
     private func delete(_ entry: WeightEntry) {
         BodyPhotoStore.delete(filename: entry.photoLocalFilename)
