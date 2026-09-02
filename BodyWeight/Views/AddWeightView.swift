@@ -221,6 +221,7 @@ struct AddWeightView: View {
         modelContext.insert(entry)
         do {
             try modelContext.save()
+            Task { await WeightSyncService.shared.synchronize(modelContext: modelContext) }
             dismiss()
         } catch {
             feedback = "保存失败：\(error.localizedDescription)"

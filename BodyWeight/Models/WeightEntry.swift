@@ -29,8 +29,10 @@ final class WeightEntry {
     var weightKG: Double = 0
     var recordedAt: Date = Date()
     var createdAt: Date = Date()
+    var updatedAt: Date = Date()
     var sourceRawValue: String = Source.manual.rawValue
     var originalText: String = ""
+    var isDeleted: Bool = false
 
     var source: Source {
         get { Source(rawValue: sourceRawValue) ?? .manual }
@@ -38,14 +40,22 @@ final class WeightEntry {
     }
 
     init(
+        id: UUID = UUID(),
         weightKG: Double,
         recordedAt: Date,
         source: Source,
-        originalText: String = ""
+        originalText: String = "",
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        isDeleted: Bool = false
     ) {
+        self.id = id
         self.weightKG = weightKG
         self.recordedAt = recordedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
         self.sourceRawValue = source.rawValue
         self.originalText = originalText
+        self.isDeleted = isDeleted
     }
 }

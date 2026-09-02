@@ -4,8 +4,14 @@ import SwiftUI
 
 struct DashboardView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \WeightEntry.recordedAt, order: .forward) private var entries: [WeightEntry]
+    @Query(
+        filter: #Predicate<WeightEntry> { !$0.isDeleted },
+        sort: \WeightEntry.recordedAt,
+        order: .forward
+    ) private var entries: [WeightEntry]
+    @StateObject private var syncService = WeightSyncService.shared
     @State private var showsAddWeight = false
+    @State private var showsSyncSettings = false
 
     var body: some View {
         NavigationStack {
@@ -24,6 +30,14 @@ struct DashboardView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("体重趋势")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showsSyncSettings = true
+                    } label: {
+                        Image(systemName: syncService.isConfigured ? "cloud.fill" : "cloud")
+                    }
+                    .accessibilityLabel("服务器同步设置")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showsAddWeight = true
@@ -34,6 +48,15 @@ struct DashboardView: View {
             }
             .sheet(isPresented: $showsAddWeight) {
                 AddWeightView()
+            }
+            .sheet(isPresented: $showsSyncSettings) {
+                SyncSettingsView(syncService: syncService)
+            }
+            .task {
+                await syncService.synchronize(modelContext: modelContext)
+            }
+            .refreshable {
+                await syncService.synchronize(modelContext: modelContext)
             }
         }
     }
@@ -197,8 +220,92 @@ struct DashboardView: View {
     }
 
     private func delete(_ entry: WeightEntry) {
-        modelContext.delete(entry)
+        entry.isDeleted = true
+        entry.updatedAt = Date()
         try? modelContext.save()
+        Task { await syncService.synchronize(modelContext: modelContext) }
+    }
+}
+
+private struct SyncSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @ObservedObject var syncService: WeightSyncService
+    @State private var token = ""
+    @State private var localMessage = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("服务器") {
+                    LabeledContent("地址") {
+                        Text("8.138.40.226")
+                            .foregroundStyle(.secondary)
+                    }
+                    Label("使用 HTTPS 加密传输", systemImage: "lock.shield")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("访问令牌") {
+                    SecureField(
+                        syncService.isConfigured ? "已保存；留空则保持不变" : "粘贴服务器令牌",
+                        text: $token
+                    )
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    Button("保存并立即同步") {
+                        Task { await saveAndSync() }
+                    }
+                    .disabled(token.isEmpty && !syncService.isConfigured)
+
+                    if syncService.isConfigured {
+                        Button("停止使用服务器", role: .destructive) {
+                            syncService.clearToken()
+                            token = ""
+                            localMessage = syncService.statusMessage
+                        }
+                    }
+                }
+
+                Section("状态") {
+                    if syncService.isSyncing { ProgressView("正在同步…") }
+                    Text(localMessage.isEmpty ? syncService.statusMessage : localMessage)
+                    if let lastSyncDate = syncService.lastSyncDate {
+                        LabeledContent("最近同步") {
+                            Text(lastSyncDate.formatted(date: .abbreviated, time: .shortened))
+                        }
+                    }
+                }
+
+                Section {
+                    Text("App 会保留本地副本。断网时可以继续记录，恢复网络后再次下拉即可同步。令牌仅保存在本机 Keychain。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("服务器同步")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func saveAndSync() async {
+        do {
+            if !token.isEmpty {
+                try syncService.saveToken(token)
+                token = ""
+            }
+            await syncService.synchronize(modelContext: modelContext)
+            localMessage = syncService.statusMessage
+        } catch {
+            localMessage = error.localizedDescription
+        }
     }
 }
 

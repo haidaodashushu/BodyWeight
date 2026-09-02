@@ -10,18 +10,20 @@
 - 自动识别今天、昨天、前天、`2026年8月30日`、`8月30日` 等日期
 - 支持 kg / 公斤 / 千克 / 斤 / lb / 磅，并统一换算为 kg
 - Swift Charts 体重趋势曲线、近 7 天变化和历史记录
-- SwiftData 本地持久化；付费开发者团队可按下方说明启用用户私有 CloudKit 同步
+- SwiftData 本地缓存 + 私有服务器双向同步，离线仍可记录
+- Bearer Token 存入 iOS Keychain，不写入代码或公开仓库
 
-## 为什么采用 iCloud + 本地回落
+## 数据存储
 
-体重属于敏感健康数据。首版使用 Apple 原生的 SwiftData/CloudKit 有几个好处：
+App 始终在设备上保留 SwiftData 本地副本，并可与个人服务器同步：
 
-- 数据保存在用户自己的 iCloud 私有数据库中，不需要维护账号系统和服务器
-- 离线可用，网络恢复后由系统同步
-- App 无需持有用户的体重数据
-- 云能力未配置或暂时不可用时仍可本地保存
+- API 地址：`https://8.138.40.226/body-weight-api/`
+- 服务端数据库：`/var/lib/body-weight-api/body-weight.sqlite3`
+- 每日备份：`/var/backups/body-weight-api`，保留 30 份
+- 保存、删除、启动 App 时自动同步，也可以在主页下拉刷新
+- 删除使用同步 tombstone，避免其他设备恢复已删除记录
 
-如果以后要支持 Android 或 Web，再把持久化层抽象到 Supabase / Firebase 等跨平台后端即可。当前版本不建议为了一个人的首版记录功能先维护独立服务器。
+服务端使用 Python 标准库、SQLite、systemd 和 Nginx，不需要 Docker。具体部署文件见 `Server/`。
 
 ## 运行
 
@@ -29,11 +31,7 @@
 2. 在 Target → Signing & Capabilities 选择你的 Apple Developer Team，并启用自动签名。
 3. 选择 iOS 17+ 模拟器或真机运行。拍照和语音功能需要真机及对应系统权限。
 
-默认配置兼容免费的 Personal Team，数据保存在设备本地。付费开发者团队如需启用 iCloud：
-
-1. 在 Signing & Capabilities 中添加 iCloud / CloudKit，并选择容器 `iCloud.com.haidaodashushu.BodyWeight`。
-2. 将 `BodyWeight/BodyWeight.entitlements` 配置为 Target 的 Code Signing Entitlements。
-3. 在 Swift Active Compilation Conditions 中添加 `ICLOUD_SYNC`。
+首次安装后点击主页右上角云朵，粘贴服务器访问令牌并选择“保存并立即同步”。令牌只保存在本机 Keychain。
 
 ## 测试
 
@@ -55,4 +53,4 @@ swift run ParserVerification
 
 ## 隐私
 
-OCR 和语音识别均调用 Apple 系统框架。体重记录不上传到本项目自建服务；启用 iCloud 时由用户的 Apple 账号负责私有数据同步。
+OCR 和语音识别均调用 Apple 系统框架。体重数据仅发送到配置的个人服务器，并通过 HTTPS 加密传输。

@@ -2,6 +2,8 @@
 DerivedData/
 .build/
 .swiftpm/
+__pycache__/
+*.pyc
 *.xcuserstate
 xcuserdata/
 *.xccheckout
