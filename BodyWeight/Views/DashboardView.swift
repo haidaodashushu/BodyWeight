@@ -86,14 +86,14 @@ struct DashboardView: View {
                 .font(.headline)
             Chart(entries) { entry in
                 LineMark(
-                    x: .value("日期", entry.recordedAt),
+                    x: .value("日期", chartDate(for: entry)),
                     y: .value("体重", entry.weightKG)
                 )
                 .interpolationMethod(.catmullRom)
                 .foregroundStyle(.blue.gradient)
 
                 AreaMark(
-                    x: .value("日期", entry.recordedAt),
+                    x: .value("日期", chartDate(for: entry)),
                     yStart: .value("下限", chartDomain.lowerBound),
                     yEnd: .value("体重", entry.weightKG)
                 )
@@ -105,14 +105,14 @@ struct DashboardView: View {
                 ))
 
                 PointMark(
-                    x: .value("日期", entry.recordedAt),
+                    x: .value("日期", chartDate(for: entry)),
                     y: .value("体重", entry.weightKG)
                 )
                 .foregroundStyle(.blue)
             }
             .chartYScale(domain: chartDomain)
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 5)) { _ in
+                AxisMarks(values: chartXAxisDates) { _ in
                     AxisGridLine().foregroundStyle(.clear)
                     AxisValueLabel(format: .dateTime.month().day())
                 }
@@ -177,6 +177,23 @@ struct DashboardView: View {
               let maximum = entries.map(\.weightKG).max() else { return 0...100 }
         let padding = max((maximum - minimum) * 0.2, 1.5)
         return (minimum - padding)...(maximum + padding)
+    }
+
+    private var chartXAxisDates: [Date] {
+        let uniqueDates = Set(entries.map { chartDate(for: $0) }).sorted()
+        let maximumLabelCount = 5
+        guard uniqueDates.count > maximumLabelCount else { return uniqueDates }
+
+        let lastIndex = uniqueDates.count - 1
+        return (0..<maximumLabelCount).map { position in
+            let progress = Double(position) / Double(maximumLabelCount - 1)
+            let index = Int((progress * Double(lastIndex)).rounded())
+            return uniqueDates[index]
+        }
+    }
+
+    private func chartDate(for entry: WeightEntry) -> Date {
+        Calendar.current.startOfDay(for: entry.recordedAt)
     }
 
     private func delete(_ entry: WeightEntry) {
