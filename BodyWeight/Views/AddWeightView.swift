@@ -196,10 +196,11 @@ struct AddWeightView: View {
 
     private func save() {
         let normalized = weightText.replacingOccurrences(of: ",", with: ".")
-        guard let weight = Double(normalized), (20...500).contains(weight) else {
+        guard let parsedWeight = Double(normalized), (20...500).contains(parsedWeight) else {
             feedback = "请输入 20–500 kg 之间的有效体重。"
             return
         }
+        let weight = (parsedWeight * 100).rounded() / 100
 
         let entry = WeightEntry(
             weightKG: weight,

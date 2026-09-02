@@ -85,7 +85,7 @@ struct DashboardView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline) {
-                Text(latestEntry?.weightKG.formatted(.number.precision(.fractionLength(1))) ?? "—")
+                Text(latestEntry.map { formattedWeight($0.weightKG) } ?? "—")
                     .font(.system(size: 44, weight: .bold, design: .rounded))
                 Text("kg")
                     .font(.title3)
@@ -93,7 +93,7 @@ struct DashboardView: View {
                 Spacer()
                 if let change = recentChange {
                     Label(
-                        change == 0 ? "持平" : change.formatted(.number.sign(strategy: .always()).precision(.fractionLength(1))) + " kg",
+                        change == 0 ? "持平" : formattedWeightChange(change) + " kg",
                         systemImage: change < 0 ? "arrow.down.right" : (change > 0 ? "arrow.up.right" : "arrow.right")
                     )
                     .font(.subheadline.weight(.semibold))
@@ -182,7 +182,7 @@ struct DashboardView: View {
                         .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(entry.weightKG.formatted(.number.precision(.fractionLength(1))) + " kg")
+                    Text(formattedWeight(entry.weightKG) + " kg")
                         .fontWeight(.semibold)
                     Button(role: .destructive) {
                         delete(entry)
@@ -232,7 +232,7 @@ struct DashboardView: View {
                                 Text(entry.recordedAt.formatted(.dateTime.month().day()))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Text(entry.weightKG.formatted(.number.precision(.fractionLength(1))) + " kg")
+                                Text(formattedWeight(entry.weightKG) + " kg")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
                             }
@@ -240,7 +240,7 @@ struct DashboardView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel(
                             entry.recordedAt.formatted(date: .abbreviated, time: .omitted)
-                            + "，" + entry.weightKG.formatted() + "公斤，全身照"
+                            + "，" + formattedWeight(entry.weightKG) + "公斤，全身照"
                         )
                     }
                 }
@@ -315,7 +315,7 @@ private struct BodyPhotoDetailView: View {
                             systemImage: "calendar"
                         )
                         Spacer()
-                        Text(entry.weightKG.formatted(.number.precision(.fractionLength(1))) + " kg")
+                        Text(formattedWeight(entry.weightKG) + " kg")
                             .font(.title3.weight(.bold))
                     }
                 }
@@ -423,4 +423,12 @@ private extension View {
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
+}
+
+private func formattedWeight(_ value: Double) -> String {
+    String(format: "%.2f", locale: .current, value)
+}
+
+private func formattedWeightChange(_ value: Double) -> String {
+    String(format: "%+.2f", locale: .current, value)
 }
